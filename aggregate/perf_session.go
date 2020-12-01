@@ -12,9 +12,7 @@ import (
 
 // PerfSession is a client to get perf-counters from a Pegasus ReplicaServer.
 type PerfSession struct {
-	*admin.RemoteCmdClient
-
-	Address string
+	session.NodeSession
 }
 
 // PerfCounter is a Pegasus perf-counter.
@@ -27,11 +25,17 @@ func (p *PerfCounter) String() string {
 	return fmt.Sprintf("{Name: %s, Value: %f}", p.Name, p.Value)
 }
 
-// NewPerfSession returns an instance of PerfSession.
-func NewPerfSession(addr string) *PerfSession {
+// NewPerfSessionByAddr returns an instance of PerfSession.
+func NewPerfSessionByAddr(addr string) *PerfSession {
 	return &PerfSession{
-		RemoteCmdClient: admin.NewRemoteCmdClient(addr, session.NodeTypeReplica),
-		Address:         addr,
+		NodeSession: session.NewNodeSession(addr, session.NodeTypeReplica),
+	}
+}
+
+// NewPerfSessionByAddr returns an instance of PerfSession using existed session.
+func NewPerfSessionByNodeSession(session session.NodeSession) *PerfSession {
+	return &PerfSession{
+		NodeSession: session,
 	}
 }
 
@@ -39,7 +43,12 @@ func NewPerfSession(addr string) *PerfSession {
 func (c *PerfSession) GetPerfCounters(filter string) ([]*PerfCounter, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	result, err := c.Call(ctx, "perf-counters-by-substr", []string{filter})
+	rc := &admin.RemoteCommand{
+		Command:   "perf-counters-by-substr",
+		Arguments: []string{filter},
+	}
+
+	result, err := rc.Call(ctx, c.NodeSession)
 	if err != nil {
 		return nil, err
 	}
