@@ -25,14 +25,14 @@ func (p *PerfCounter) String() string {
 	return fmt.Sprintf("{Name: %s, Value: %f}", p.Name, p.Value)
 }
 
-// NewPerfSessionByAddr returns an instance of PerfSession.
+// NewPerfSessionByAddr returns an instance of PerfSession using node address
 func NewPerfSessionByAddr(addr string) *PerfSession {
 	return &PerfSession{
 		NodeSession: session.NewNodeSession(addr, session.NodeTypeReplica),
 	}
 }
 
-// NewPerfSessionByAddr returns an instance of PerfSession using existed session.
+// NewPerfSessionByNodeSession returns an instance of PerfSession using existed session.
 func NewPerfSessionByNodeSession(session session.NodeSession) *PerfSession {
 	return &PerfSession{
 		NodeSession: session,
