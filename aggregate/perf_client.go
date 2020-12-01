@@ -120,7 +120,7 @@ func (m *PerfClient) updateNodes() {
 		addr := n.Address.GetAddress()
 		node, found := m.nodes[addr]
 		if !found {
-			newNodes[addr] = NewPerfSessionByAddr(addr)
+			newNodes[addr] = NewPerfSession(addr)
 		} else {
 			newNodes[addr] = node
 		}
