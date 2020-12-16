@@ -3,6 +3,7 @@ package aggregate
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/XiaoMi/pegasus-go-client/idl/admin"
@@ -28,10 +29,7 @@ func (m *PerfClient) GetPartitionStats() ([]*PartitionStats, error) {
 		return nil, err
 	}
 
-	nodeStats, err := m.GetNodeStats("@")
-	if err != nil {
-		return nil, err
-	}
+	nodeStats := m.GetNodeStats("@")
 
 	for _, n := range nodeStats {
 		for name, value := range n.Stats {
@@ -71,15 +69,27 @@ func (m *PerfClient) getPrimaries() (map[base.Gpid]string, error) {
 	defer cancel()
 
 	result := make(map[base.Gpid]string)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(len(tables))
+
 	for _, tb := range tables {
-		tableCfg, err := m.meta.QueryConfig(ctx, tb.AppName)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range tableCfg.Partitions {
-			result[*p.Pid] = p.Primary.GetAddress()
-		}
+		tb := tb
+		go func() {
+			tableCfg, err := m.meta.QueryConfig(ctx, tb.AppName)
+			if err != nil {
+				panic(fmt.Errorf("[%s]unable to query config: %s", tb.AppName, err))
+			}
+			for _, p := range tableCfg.Partitions {
+				result[*p.Pid] = p.Primary.GetAddress()
+			}
+			mu.Unlock()
+			wg.Done()
+		}()
 	}
+	wg.Wait()
+
 	return result, nil
 }
 
@@ -109,25 +119,38 @@ type NodeStat struct {
 }
 
 // GetNodeStats retrieves all the stats matched with `filter` from replica nodes.
-func (m *PerfClient) GetNodeStats(filter string) ([]*NodeStat, error) {
+func (m *PerfClient) GetNodeStats(filter string) []*NodeStat {
 	m.updateNodes()
 
-	var ret []*NodeStat
-	for _, n := range m.nodes {
-		stat := &NodeStat{
-			Addr:  n.Address,
-			Stats: make(map[string]float64),
-		}
-		perfCounters, err := n.GetPerfCounters(filter)
-		if err != nil {
-			return nil, fmt.Errorf("unable to query perf-counters: %s", err)
-		}
-		for _, p := range perfCounters {
-			stat.Stats[p.Name] = p.Value
-		}
-		ret = append(ret, stat)
+	var results []*NodeStat
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(len(m.nodes))
+
+	for _, node := range m.nodes {
+		node := node
+		go func() {
+			stat := &NodeStat{
+				Addr:  node.Address,
+				Stats: make(map[string]float64),
+			}
+
+			perfCounters, err := node.GetPerfCounters(filter)
+			if err != nil {
+				panic(fmt.Errorf("[%s]unable to query perf-counters: %s", node.Address, err))
+			}
+			for _, p := range perfCounters {
+				stat.Stats[p.Name] = p.Value
+			}
+			results = append(results, stat)
+			mu.Unlock()
+			wg.Done()
+		}()
 	}
-	return ret, nil
+	wg.Wait()
+
+	return results
 }
 
 func (m *PerfClient) listNodes() ([]*admin.NodeInfo, error) {
