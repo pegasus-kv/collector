@@ -78,6 +78,7 @@ func (m *PerfClient) getPrimaries() (map[base.Gpid]string, error) {
 		tb := tb
 		go func() {
 			tableCfg, err := m.meta.QueryConfig(ctx, tb.AppName)
+			mu.Lock()
 			if err != nil {
 				panic(fmt.Errorf("[%s]unable to query config: %s", tb.AppName, err))
 			}
@@ -137,6 +138,7 @@ func (m *PerfClient) GetNodeStats(filter string) []*NodeStat {
 			}
 
 			perfCounters, err := node.GetPerfCounters(filter)
+			mu.Lock()
 			if err != nil {
 				panic(fmt.Errorf("[%s]unable to query perf-counters: %s", node.Address, err))
 			}
