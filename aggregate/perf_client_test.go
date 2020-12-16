@@ -9,7 +9,8 @@ import (
 
 func TestPerfClientGetNodeStats(t *testing.T) {
 	pclient := NewPerfClient([]string{"127.0.0.1:34601"})
-	nodes := pclient.GetNodeStats("@")
+	nodes, err := pclient.GetNodeStats("@")
+	assert.Nil(t, err)
 	assert.Greater(t, len(nodes), 0)
 	assert.Greater(t, len(nodes[0].Stats), 0)
 	for _, n := range nodes {

@@ -10,6 +10,7 @@ import (
 	"github.com/XiaoMi/pegasus-go-client/idl/base"
 	"github.com/XiaoMi/pegasus-go-client/session"
 	log "github.com/sirupsen/logrus"
+	batchErr "k8s.io/apimachinery/pkg/util/errors"
 )
 
 // PerfClient manages sessions to all replica nodes.
@@ -29,7 +30,10 @@ func (m *PerfClient) GetPartitionStats() ([]*PartitionStats, error) {
 		return nil, err
 	}
 
-	nodeStats := m.GetNodeStats("@")
+	nodeStats, err := m.GetNodeStats("@")
+	if err != nil {
+		return nil, err
+	}
 
 	for _, n := range nodeStats {
 		for name, value := range n.Stats {
@@ -64,34 +68,33 @@ func (m *PerfClient) getPrimaries() (map[base.Gpid]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	result := make(map[base.Gpid]string)
+	result, err := func() (map[base.Gpid]string, error) {
+		result := make(map[base.Gpid]string)
+		var mu sync.Mutex
+		var funcs []func() error
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(len(tables))
+		for _, tb := range tables {
+			tb := tb
+			funcs = append(funcs, func() (subErr error) {
+				tableCfg, err := m.meta.QueryConfig(ctx, tb.AppName)
+				mu.Lock()
+				if err != nil {
+					return err
+				}
+				for _, p := range tableCfg.Partitions {
+					result[*p.Pid] = p.Primary.GetAddress()
+				}
+				mu.Unlock()
+				return nil
+			})
+		}
+		return result, batchErr.AggregateGoroutines(funcs...)
+	}()
 
-	for _, tb := range tables {
-		tb := tb
-		go func() {
-			tableCfg, err := m.meta.QueryConfig(ctx, tb.AppName)
-			mu.Lock()
-			if err != nil {
-				panic(fmt.Errorf("[%s]unable to query config: %s", tb.AppName, err))
-			}
-			for _, p := range tableCfg.Partitions {
-				result[*p.Pid] = p.Primary.GetAddress()
-			}
-			mu.Unlock()
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-
-	return result, nil
+	return result, err
 }
 
 func (m *PerfClient) preparePrimariesStats() (map[base.Gpid]*PartitionStats, error) {
@@ -120,39 +123,39 @@ type NodeStat struct {
 }
 
 // GetNodeStats retrieves all the stats matched with `filter` from replica nodes.
-func (m *PerfClient) GetNodeStats(filter string) []*NodeStat {
+func (m *PerfClient) GetNodeStats(filter string) ([]*NodeStat, error) {
 	m.updateNodes()
 
-	var results []*NodeStat
+	results, err := func() ([]*NodeStat, error) {
+		var results []*NodeStat
+		var funcs []func() error
+		var mu sync.Mutex
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(len(m.nodes))
+		for _, node := range m.nodes {
+			node := node
+			funcs = append(funcs, func() (subErr error) {
+				stat := &NodeStat{
+					Addr:  node.Address,
+					Stats: make(map[string]float64),
+				}
+				perfCounters, err := node.GetPerfCounters(filter)
+				fmt.Println(node.Address)
+				mu.Lock()
+				if err != nil {
+					return err
+				}
+				for _, p := range perfCounters {
+					stat.Stats[p.Name] = p.Value
+				}
+				results = append(results, stat)
+				mu.Unlock()
+				return nil
+			})
+		}
+		return results, batchErr.AggregateGoroutines(funcs...)
+	}()
 
-	for _, node := range m.nodes {
-		node := node
-		go func() {
-			stat := &NodeStat{
-				Addr:  node.Address,
-				Stats: make(map[string]float64),
-			}
-
-			perfCounters, err := node.GetPerfCounters(filter)
-			mu.Lock()
-			if err != nil {
-				panic(fmt.Errorf("[%s]unable to query perf-counters: %s", node.Address, err))
-			}
-			for _, p := range perfCounters {
-				stat.Stats[p.Name] = p.Value
-			}
-			results = append(results, stat)
-			mu.Unlock()
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-
-	return results
+	return results, err
 }
 
 func (m *PerfClient) listNodes() ([]*admin.NodeInfo, error) {
